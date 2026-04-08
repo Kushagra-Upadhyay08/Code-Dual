@@ -11,7 +11,7 @@ require('./db');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const matchRoutes = require('./routes/matches');
-const { setupSocket } = require('./socket');
+const { setupSocket } = require('../socket');
 
 const app = express();
 const server = http.createServer(app);
