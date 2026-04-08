@@ -1,17 +1,18 @@
 {
   "name": "codeduel-app",
   "version": "1.0.0",
-  "description": "Real-time 1v1 multiplayer coding quiz website",
+  "description": "Real-time 1v1 multiplayer coding quiz website with Battleship-style board mechanics",
   "main": "backend/server/index.js",
   "scripts": {
     "start": "cd backend && npm start",
     "build": "cd backend && npm install",
-    "dev": "cd backend && npm run dev"
+    "dev": "cd backend && npm run dev",
+    "seed": "cd backend && npm run seed"
   },
   "engines": {
     "node": ">=16.0.0",
     "npm": ">=8.0.0"
   },
-  "keywords": ["quiz", "multiplayer", "coding", "realtime"],
+  "keywords": ["quiz", "multiplayer", "coding", "realtime", "battleship"],
   "license": "MIT"
 }
