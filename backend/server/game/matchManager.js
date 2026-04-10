@@ -197,7 +197,11 @@ function startNextQuestion(matchId) {
 function submitAnswer(matchId, userId, questionIndex, answer) {
   const match = activeMatches.get(matchId);
   if (!match) return { success: false, error: 'Match not found' };
-  if (match.phase !== 'question') return { success: false, error: 'Not in question phase' };
+  // Allow answering during 'question' phase, and also during instant-dig
+  // (when first player answered correctly and is digging before opponent answers)
+  if (match.phase !== 'question' && !match.instantDiggingInProgress) {
+    return { success: false, error: 'Not in question phase' };
+  }
   if (questionIndex !== match.currentQuestionIndex) return { success: false, error: 'Wrong question' };
 
   const player = match.players[userId];

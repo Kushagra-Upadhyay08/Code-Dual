@@ -206,8 +206,10 @@ function setupSocket(io) {
         const opponent = match.players[opponentId];
 
         if (evalResult.correct) {
-          // Correct! Player gets instant dig
-          match.phase = 'digging';
+          // Correct! Player gets instant dig — but do NOT advance the game yet.
+          // The game will advance only after processQuestionResults runs
+          // (once the opponent also answers or their timer expires).
+          match.instantDiggingInProgress = true;
           socket.emit('quiz:instant_result', {
             correct: true,
             correctAnswer: evalResult.correctAnswer,
@@ -282,8 +284,10 @@ function setupSocket(io) {
         });
       }
 
-      // Check if all digs done
-      if (matchManager.checkAllDigsDone(matchId)) {
+      // Only advance if this is NOT an instant-dig (before opponent answered).
+      // If it IS an instant-dig, processQuestionResults will handle advancement
+      // once the opponent's answer comes in.
+      if (!match.instantDiggingInProgress && matchManager.checkAllDigsDone(matchId)) {
         clearDigTimer(match);
         advanceToNextQuestion(io, matchId);
       }
@@ -291,8 +295,9 @@ function setupSocket(io) {
 
     socket.on('dig:skip', ({ matchId }) => {
       matchManager.skipDig(matchId, user.id);
-      if (matchManager.checkAllDigsDone(matchId)) {
-        const match = matchManager.getMatch(matchId);
+      const match = matchManager.getMatch(matchId);
+      // Only advance if this is NOT an instant-dig scenario
+      if (!match?.instantDiggingInProgress && matchManager.checkAllDigsDone(matchId)) {
         clearDigTimer(match);
         advanceToNextQuestion(io, matchId);
       }
@@ -414,7 +419,8 @@ function processQuestionResults(io, matchId) {
   const match = matchManager.getMatch(matchId);
   if (!match) return;
 
-  // Reset reduced timer state for next question
+  // Reset instant-dig and reduced timer state
+  match.instantDiggingInProgress = false;
   match.reducedTimerActive = false;
   if (match.reducedTimer) {
     clearTimeout(match.reducedTimer);
@@ -518,6 +524,11 @@ function clearDigTimer(match) {
 function advanceToNextQuestion(io, matchId) {
   const match = matchManager.getMatch(matchId);
   if (!match) return;
+
+  // Guard against double-advancement from concurrent timers/events
+  const advanceKey = `advancing_${match.currentQuestionIndex}`;
+  if (match[advanceKey]) return;
+  match[advanceKey] = true;
 
   setTimeout(() => {
     const questionData = matchManager.startNextQuestion(matchId);
