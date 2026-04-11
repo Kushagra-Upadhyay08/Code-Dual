@@ -331,7 +331,7 @@ function setupSocket(io) {
         totalScore: result.totalScore,
       });
 
-      // Notify opponent
+      // Notify opponent of the dig
       const match = matchManager.getMatch(matchId);
       const opponentId = matchManager.getOpponentId(match, user.id);
       const opponent = match.players[opponentId];
@@ -340,6 +340,29 @@ function setupSocket(io) {
           row, col,
           hit: result.hit,
         });
+      }
+
+      // *** WIN CONDITION 1: All opponent shapes revealed ***
+      if (result.allOpponentShapesRevealed) {
+        // Cancel all running timers immediately
+        if (match.questionTimer) { clearTimeout(match.questionTimer); match.questionTimer = null; }
+        if (match.digPhaseTimer) { clearTimeout(match.digPhaseTimer); match.digPhaseTimer = null; }
+        if (match.instantDigTimer) { clearTimeout(match.instantDigTimer); match.instantDigTimer = null; }
+        if (match.reducedTimer) { clearTimeout(match.reducedTimer); match.reducedTimer = null; }
+
+        // Mark the winner and finish the match
+        match._revealWinnerId = user.id;
+        const finalResults = matchManager.finishMatch(matchId, 'reveal');
+
+        // Send personalised results to each player
+        Object.entries(match.players).forEach(([id, player]) => {
+          if (player.socketId) {
+            io.to(player.socketId).emit('match:finished', finalResults);
+          }
+        });
+
+        setTimeout(() => matchManager.cleanupMatch(matchId), 60000);
+        return; // stop here — don't advance to next question
       }
 
       if (match.waitingForInstantDig) {

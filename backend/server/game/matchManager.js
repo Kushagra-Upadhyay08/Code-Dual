@@ -362,11 +362,15 @@ function submitDig(matchId, userId, row, col) {
 
   player.revealedOnOpponent.push({ row, col, hit });
 
+  // Check if this player has now revealed ALL opponent shapes
+  const allRevealed = hit && checkAllOpponentShapesRevealed(match, userId);
+
   return {
     success: true,
     hit,
     bonusPoints: hit ? 3 : 0,
     totalScore: player.score,
+    allOpponentShapesRevealed: allRevealed,
   };
 }
 
@@ -383,7 +387,33 @@ function checkAllDigsDone(matchId) {
   return Object.values(match.players).every(p => !p.pendingDig);
 }
 
-function finishMatch(matchId) {
+/**
+ * Count total shape cells (value === 1) on a player's board
+ */
+function countShapeCells(board) {
+  let count = 0;
+  for (const row of board) {
+    for (const cell of row) {
+      if (cell === 1) count++;
+    }
+  }
+  return count;
+}
+
+/**
+ * Check if a player has revealed ALL shape cells on the opponent's board
+ */
+function checkAllOpponentShapesRevealed(match, attackerId) {
+  const opponentId = getOpponentId(match, attackerId);
+  const opponent = match.players[opponentId];
+  const attacker = match.players[attackerId];
+  if (!opponent?.board) return false;
+
+  const totalShapeCells = countShapeCells(opponent.board);
+  return attacker.digsHit >= totalShapeCells;
+}
+
+function finishMatch(matchId, winCondition = 'points') {
   const match = activeMatches.get(matchId);
   if (!match) return null;
 
@@ -396,12 +426,19 @@ function finishMatch(matchId) {
   let winnerId = null;
   let isDraw = false;
 
-  if (p1.score > p2.score) {
-    winnerId = playerIds[0];
-  } else if (p2.score > p1.score) {
-    winnerId = playerIds[1];
+  if (winCondition === 'reveal') {
+    // Winner is whoever revealed all shapes — already determined by caller
+    winnerId = match._revealWinnerId || null;
+    isDraw = false;
   } else {
-    isDraw = true;
+    // Judge by score (all questions answered)
+    if (p1.score > p2.score) {
+      winnerId = playerIds[0];
+    } else if (p2.score > p1.score) {
+      winnerId = playerIds[1];
+    } else {
+      isDraw = true;
+    }
   }
 
   // Update DB
@@ -434,6 +471,7 @@ function finishMatch(matchId) {
     matchId,
     winnerId,
     isDraw,
+    winCondition, // 'points' | 'reveal'
     players: {},
   };
 

@@ -492,26 +492,37 @@
 
     const titleEl = document.getElementById('result-title');
     const subEl = document.getElementById('result-subtitle');
+    const isWinner = data.winnerId === currentUser.id;
 
     if (data.isDraw) {
       titleEl.textContent = "It's a Draw!";
       titleEl.className = 'draw';
       subEl.textContent = 'Both players finished with the same score';
-    } else if (data.winnerId === currentUser.id) {
+    } else if (isWinner) {
       titleEl.textContent = '🏆 You Win!';
       titleEl.className = 'win';
-      subEl.textContent = 'Congratulations on your victory!';
+      // Show why they won
+      if (data.winCondition === 'reveal') {
+        subEl.textContent = '🎯 You revealed all of your opponent\'s shapes!';
+      } else {
+        subEl.textContent = '✅ You answered more questions correctly!';
+      }
     } else {
       titleEl.textContent = 'You Lost';
       titleEl.className = 'loss';
-      subEl.textContent = 'Better luck next time!';
+      // Show why they lost
+      if (data.winCondition === 'reveal') {
+        subEl.textContent = '💀 Your opponent revealed all your shapes!';
+      } else {
+        subEl.textContent = '📊 Your opponent had more points at the end.';
+      }
     }
 
     const scoresEl = document.getElementById('results-scores');
     scoresEl.innerHTML = Object.entries(data.players).map(([id, p]) => {
       const isMe = parseInt(id) === currentUser.id;
-      const isWinner = parseInt(id) === data.winnerId;
-      return `<div class="result-player-card ${isWinner ? 'winner' : ''}">
+      const isWinnerCard = parseInt(id) === data.winnerId;
+      return `<div class="result-player-card ${isWinnerCard ? 'winner' : ''}">
         <div class="result-player-name">${p.username} ${isMe ? '(You)' : ''}</div>
         <div class="result-final-score">${p.score}</div>
         <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem">Final Score</div>
