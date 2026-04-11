@@ -206,10 +206,10 @@ function setupSocket(io) {
         const opponent = match.players[opponentId];
 
         if (evalResult.correct) {
-          // Correct! Player gets instant dig — but do NOT advance the game yet.
-          // The game will advance only after processQuestionResults runs
-          // (once the opponent also answers or their timer expires).
+          // Correct! Player gets instant dig.
+          // Lock out the opponent immediately — they can no longer answer.
           match.instantDiggingInProgress = true;
+          match.waitingForInstantDig = true;
           socket.emit('quiz:instant_result', {
             correct: true,
             correctAnswer: evalResult.correctAnswer,
@@ -218,6 +218,38 @@ function setupSocket(io) {
             questionNumber: evalResult.questionNumber,
           });
           socket.emit('dig:phase', { canDig: true, timeLimit: 15000 });
+
+          // Auto-submit null for the opponent (lock them out)
+          matchManager.submitAnswer(matchId, opponentId, match.currentQuestionIndex, null);
+
+          // Notify opponent they are locked out
+          if (opponent?.socketId) {
+            io.to(opponent.socketId).emit('quiz:opponent_answered', {
+              correct: true,
+              lockedOut: true,
+              correctAnswer: evalResult.correctAnswer,
+            });
+          }
+
+          // Cancel the full question timer
+          if (match.questionTimer) {
+            clearTimeout(match.questionTimer);
+            match.questionTimer = null;
+          }
+
+          // Do NOT call processQuestionResults yet.
+          // Wait for the instant dig to complete (dig/skip/timeout),
+          // THEN processQuestionResults will run and advance to the next question.
+          match.instantDigTimer = setTimeout(() => {
+            // Auto-skip dig if player hasn't dug yet
+            const p = match.players[user.id];
+            if (p && p.pendingDig) {
+              matchManager.skipDig(matchId, user.id);
+            }
+            match.waitingForInstantDig = false;
+            match.instantDiggingInProgress = false;
+            processQuestionResults(io, matchId);
+          }, 16000);
         } else {
           // Wrong — lock answer, show result to this player
           socket.emit('quiz:instant_result', {
@@ -227,33 +259,36 @@ function setupSocket(io) {
             totalScore: evalResult.totalScore,
             questionNumber: evalResult.questionNumber,
           });
-        }
 
-        // Notify the opponent that this player has answered
-        if (opponent?.socketId) {
-          io.to(opponent.socketId).emit('quiz:opponent_answered', {
-            reducedTime: 10,
-          });
-        }
-
-        // Start a 10-second reduced timer for the opponent (if not already started)
-        if (!match.reducedTimerActive) {
-          match.reducedTimerActive = true;
-          // Cancel the original full timer
-          if (match.questionTimer) {
-            clearTimeout(match.questionTimer);
-            match.questionTimer = null;
-          }
-          match.reducedTimer = setTimeout(() => {
-            // Auto-submit null for opponent who hasn't answered
-            Object.entries(match.players).forEach(([id, player]) => {
-              if (player.answers[match.currentQuestionIndex] === undefined) {
-                matchManager.submitAnswer(matchId, parseInt(id), match.currentQuestionIndex, null);
-              }
+          // Notify the opponent that this player answered (but got it wrong)
+          // Opponent still gets to answer with reduced time
+          if (opponent?.socketId) {
+            io.to(opponent.socketId).emit('quiz:opponent_answered', {
+              correct: false,
+              lockedOut: false,
+              reducedTime: 10,
             });
-            match.reducedTimer = null;
-            processQuestionResults(io, matchId);
-          }, 11000); // 10s + 1s grace
+          }
+
+          // Start a 10-second reduced timer for the opponent (if not already started)
+          if (!match.reducedTimerActive) {
+            match.reducedTimerActive = true;
+            // Cancel the original full timer
+            if (match.questionTimer) {
+              clearTimeout(match.questionTimer);
+              match.questionTimer = null;
+            }
+            match.reducedTimer = setTimeout(() => {
+              // Auto-submit null for opponent who hasn't answered
+              Object.entries(match.players).forEach(([id, player]) => {
+                if (player.answers[match.currentQuestionIndex] === undefined) {
+                  matchManager.submitAnswer(matchId, parseInt(id), match.currentQuestionIndex, null);
+                }
+              });
+              match.reducedTimer = null;
+              processQuestionResults(io, matchId);
+            }, 11000); // 10s + 1s grace
+          }
         }
       }
     });
@@ -284,10 +319,18 @@ function setupSocket(io) {
         });
       }
 
-      // Only advance if this is NOT an instant-dig (before opponent answered).
-      // If it IS an instant-dig, processQuestionResults will handle advancement
-      // once the opponent's answer comes in.
-      if (!match.instantDiggingInProgress && matchManager.checkAllDigsDone(matchId)) {
+      if (match.waitingForInstantDig) {
+        // Instant dig completed — cancel the instant dig timer,
+        // then process results and advance to next question.
+        if (match.instantDigTimer) {
+          clearTimeout(match.instantDigTimer);
+          match.instantDigTimer = null;
+        }
+        match.waitingForInstantDig = false;
+        match.instantDiggingInProgress = false;
+        processQuestionResults(io, matchId);
+      } else if (matchManager.checkAllDigsDone(matchId)) {
+        // Normal dig phase (both players may be digging)
         clearDigTimer(match);
         advanceToNextQuestion(io, matchId);
       }
@@ -296,8 +339,18 @@ function setupSocket(io) {
     socket.on('dig:skip', ({ matchId }) => {
       matchManager.skipDig(matchId, user.id);
       const match = matchManager.getMatch(matchId);
-      // Only advance if this is NOT an instant-dig scenario
-      if (!match?.instantDiggingInProgress && matchManager.checkAllDigsDone(matchId)) {
+
+      if (match?.waitingForInstantDig) {
+        // Instant dig skipped — cancel the instant dig timer,
+        // then process results and advance to next question.
+        if (match.instantDigTimer) {
+          clearTimeout(match.instantDigTimer);
+          match.instantDigTimer = null;
+        }
+        match.waitingForInstantDig = false;
+        match.instantDiggingInProgress = false;
+        processQuestionResults(io, matchId);
+      } else if (matchManager.checkAllDigsDone(matchId)) {
         clearDigTimer(match);
         advanceToNextQuestion(io, matchId);
       }
@@ -341,8 +394,15 @@ function setupSocket(io) {
     // ====== DISCONNECT ======
 
     socket.on('disconnect', () => {
-      console.log(`[Socket] ${user.username} disconnected`);
-      onlineUsers.delete(user.id);
+      console.log(`[Socket] ${user.username} disconnected (${socket.id})`);
+
+      // Only remove from online users if this socket is still the registered one.
+      // Prevents race condition: new connection arrives before old disconnect fires,
+      // which would incorrectly delete the new entry.
+      const currentEntry = onlineUsers.get(user.id);
+      if (currentEntry && currentEntry.socketId === socket.id) {
+        onlineUsers.delete(user.id);
+      }
       socketUserMap.delete(socket.id);
 
       // Handle match disconnect
@@ -350,16 +410,25 @@ function setupSocket(io) {
       if (match && match.phase !== 'results') {
         const opponentId = matchManager.getOpponentId(match, user.id);
         const opponent = match.players[opponentId];
+        const disconnectedMatchId = match.id;
 
         // Give 30 seconds to reconnect, then forfeit
         setTimeout(() => {
           const currentOnline = onlineUsers.get(user.id);
           if (!currentOnline) {
-            const forfeitResult = matchManager.forfeitMatch(match.id, user.id);
-            if (forfeitResult && opponent?.socketId) {
-              io.to(opponent.socketId).emit('match:opponent_disconnected', forfeitResult);
+            // Verify match still exists and hasn't already finished
+            const currentMatch = matchManager.getMatch(disconnectedMatchId);
+            if (currentMatch && currentMatch.phase !== 'results') {
+              const forfeitResult = matchManager.forfeitMatch(disconnectedMatchId, user.id);
+              if (forfeitResult) {
+                // Use fresh opponent socketId (may have changed if they reconnected)
+                const currentOpponent = currentMatch.players[opponentId];
+                if (currentOpponent?.socketId) {
+                  io.to(currentOpponent.socketId).emit('match:opponent_disconnected', forfeitResult);
+                }
+              }
+              matchManager.cleanupMatch(disconnectedMatchId);
             }
-            matchManager.cleanupMatch(match.id);
           }
         }, 30000);
 
@@ -421,7 +490,12 @@ function processQuestionResults(io, matchId) {
 
   // Reset instant-dig and reduced timer state
   match.instantDiggingInProgress = false;
+  match.waitingForInstantDig = false;
   match.reducedTimerActive = false;
+  if (match.instantDigTimer) {
+    clearTimeout(match.instantDigTimer);
+    match.instantDigTimer = null;
+  }
   if (match.reducedTimer) {
     clearTimeout(match.reducedTimer);
     match.reducedTimer = null;

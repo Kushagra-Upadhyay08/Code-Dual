@@ -29,6 +29,7 @@
   let timerInterval = null;
   let currentQuestionIndex = -1;
   let answered = false;
+  let lockedOut = false;
 
   // Init boards
   function initBoard(size) {
@@ -275,6 +276,7 @@
     showPhase('quiz');
     answered = false;
     canDig = false;
+    lockedOut = false;
     currentQuestionIndex = data.currentIndex;
 
     document.getElementById('q-number').textContent = `Q${data.questionNumber} / ${data.totalQuestions}`;
@@ -375,16 +377,37 @@
 
   socket.on('quiz:opponent_answered', (data) => {
     const feedbackEl = document.getElementById('question-feedback');
-    if (!answered) {
+    if (data.lockedOut) {
+      // Opponent answered correctly — we are locked out
+      lockedOut = true;
+      if (!answered) {
+        answered = true;
+        if (timerInterval) clearInterval(timerInterval);
+        document.getElementById('q-timer').textContent = '0';
+        document.querySelectorAll('.option-btn').forEach(btn => {
+          btn.disabled = true;
+          // Highlight the correct answer so the locked-out player can see it
+          if (data.correctAnswer && btn.dataset.answer === data.correctAnswer) {
+            btn.classList.add('correct');
+          }
+        });
+      }
+      feedbackEl.classList.remove('hidden');
+      feedbackEl.innerHTML = `<span style="color:var(--accent-red)">🔒 Opponent answered correctly! You are locked out.</span>`;
+    } else {
+      // Opponent answered wrong — we still get to answer with reduced time
+      if (!answered) {
         feedbackEl.classList.remove('hidden');
         feedbackEl.innerHTML = `<span style="color:var(--accent-amber)">⚠️ Opponent answered! Hurry up!</span>`;
+      }
+      reduceTimer(data.reducedTime);
     }
-    reduceTimer(data.reducedTime);
   });
 
   socket.on('quiz:results', (data) => {
     // Show correct/wrong
     document.querySelectorAll('.option-btn').forEach(btn => {
+      btn.disabled = true;
       if (btn.dataset.answer === data.correctAnswer) btn.classList.add('correct');
       if (btn.classList.contains('selected') && btn.dataset.answer !== data.correctAnswer) btn.classList.add('wrong');
     });
@@ -396,7 +419,10 @@
     // Show feedback
     const feedbackEl = document.getElementById('question-feedback');
     feedbackEl.classList.remove('hidden');
-    if (data.yourResult.correct) {
+    if (lockedOut) {
+      // Player was locked out — don't show "Wrong answer", show lockout message
+      feedbackEl.innerHTML = `<span style="color:var(--accent-red)">🔒 Locked out — Opponent answered first!</span>`;
+    } else if (data.yourResult.correct) {
       feedbackEl.innerHTML = `<span style="color:var(--accent-green)">✅ Correct! +${data.yourResult.pointsEarned} points</span>`;
     } else {
       feedbackEl.innerHTML = `<span style="color:var(--accent-red)">❌ Wrong answer</span>`;
